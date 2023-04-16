@@ -1,0 +1,628 @@
+---
+title: "Statistical Learning"
+author: "Gabriel Rodríguez Molina"
+date: "2023-04-16"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(data.table)
+library(caret)
+library(tidyverse)
+library(ggpubr)
+library(ggplot2)
+library(descr)
+library(corrplot)
+library(datasets)
+library(mlbench)
+df<-fread("census_section_stats.csv", sep=";", dec=",", stringsAsFactors = F)
+head(df)
+
+```
+
+# Problem description
+
+In our cities, there are some services that are essential for our daily living: pharmacies, schools or transport points of sale. However, these facilities are not necessarily well distributed. We want to analyze in this assignment which areas lacks of these facilities based on regression models. The steps to perform the analysis are:
+
+- Do a descriptive analysis of data
+- Are there variables we can discard?
+- Perform a feature engineering process extending important variables.
+- Perform regression modelling for the three target variables (three different models).
+- Create a score to measure which areas have enough facilities and which ones don't.
+- Which variables are the most highly related to the score? In particular, what makes a census section to have a low number of facilities?
+- Visualize and discuss the results
+
+# Dataset description
+For every census section we have a row in our dataset, here are some of the main columns of the dataset:
+* census_section_code: census_section_code identifier
+* n_pharmacies (target variable 1): number of pharmacies in the census section
+* n_schools (target variable 2): number of schools in the census section
+* n_transport_salespoints: number of transport points of sale.
+
+
+# Introduction
+
+We are going to perform different statistical models in order to guess which areas lack any of the different facilities (schools, transport points of sale, pharmacies). In this context, we will perform different regression models that we think can adapt better to the data we have for each target variable. In this context, we are going to apply linear, poisson and logistic regression for each variable respectively and try to extract conclusions. 
+
+
+
+# Descriptive analysis
+To start with we are going to make a general descriptive analysis of the data, to interpret it and start guessing which variables should we take into account.
+```{r echo=TRUE}
+#Some general characteristics of sample linked to our target variables:
+bxp<-ggplot(df,mapping=aes(x=n_pharmacies))+geom_bar(fill="orange") 
+dp<-ggplot(df,mapping=aes(x=n_schools))+geom_bar(fill="lightblue")
+dp1<-ggplot(df,mapping=aes(x=n_transport_salespoints))+geom_bar(fill="Red") 
+ggarrange(bxp,dp,dp1)
+```
+
+Our target variables are referred of the number of pharmacies, schools and transport sales points which can be founded in each census section. All of the variables are discrete and skewed to the right, none of them have normal distribution. The most frequent value of the target variables is between 0 or 1 and all of them follow a descendant tendency. In the case of pharmacies, having values 0 and 1 are more or less similar, while in the case of schools and transport sales points 0 is the  the most frequent value. We have predominantly a scarcity of services in each section.
+
+```{r echo=TRUE}
+#Explanatory variables which seem to be interesting to explain the differences in the distribution of services.
+bxp<-ggplot(df,mapping=aes(y=avg_age))+geom_boxplot(fill="Orange")
+dp<-ggplot(df,mapping=aes(y=family_income))+geom_boxplot(fill="lightblue")
+dp1<-ggplot(df,mapping=aes(y=pcg_foreigners))+geom_boxplot(fill="Red")
+dp2<-ggplot(df,mapping=aes(y=population_density))+geom_boxplot(fill="Grey")
+ggarrange(bxp,dp,dp1, dp2,
+          ncol = 5, nrow = 1)
+```
+
+While average age is closer to normality most of our independent variables are skewed to the left, as it happened with the target variables. On the other hand, all of them are continuous. In the case of average age the variance is high, including many extreme values. High variance means that we well find more sectors than usual were most people are around 60 years old, while in many others mean age is around 30. The rest of the variables presents higher frequency in the first three quartiles, all of them presenting only outliers for high values. This means that there are more sectors with low-middle class, low percentage of immigration which aren`t either very populated. However, we can find also few sectors which present an extremely high income (rich neighbourhoods), percentage of foreigners (possible ghettos) and population density (cities).
+
+
+# Feature selection
+```{r echo=TRUE}
+#Some variables are not useful for our analysis so, to start with, we are picking only those which at least can be statistically analyzed.
+filter_df <- df %>% select(area, population, n_pharmacies, n_schools, n_transport_salespoints, family_income, income_per_capita, avg_age, spanish, foreigners, europeans, germans, bulgarian, french, italian, polish, british, romanian, non_european, russian, ukranian, african, algerian, moroccan,nigerian, senegalese, american, argentinian, bolivian, brazilian, colombian, cuban, chilean, ecuadorian, paraguayan, peruvian, uruguayan, venezuelan, asian, chininese, pakistani, oceanic, dominican, pcg_age_0_24, pcg_age_25_39, pcg_age_40_49, pcg_age_50_59, pcg_age_60_69, pcg_age_70_y_mas, pcg_expense_home,ratio_expense_home, pcg_num_transaction_city, pcg_num_transaction_norm_city, altitude, city_population, population_density, n_pharmacies, n_schools, n_transport_salespoints, pcg_foreigners)
+
+
+# We are also performing a second filtering in which we select only those variables which are minimally related to our target variables. To select them we are using:
+
+cor.table = cor(filter_df)
+corrplot(cor.table)
+
+library(DataExplorer)
+#create_report(df_n_schools) 
+
+```
+In relation to the number of schools we see a negative correlation with the average age and a positive one with the percentage of people with ages between 0 and 24. On the other hand, the correlation of our target variable with the percentage of people with 70 years or more is negative. It makes sense that in those sectors with more young population there are more schools while it decreases in places with older citizens. Also, the correlation with foreigners is negative, we will have to have a look towards this question deeper. 
+
+For the target variable "n_pharmacies" we expected the opposite, a negative correlation with the average age and a positive one in relation to the percentage of those with 70 years old or more. However, these variables are not correlated.
+
+In the case of the target variable "n_transport_salespoints" the relation with the percentage of those between 0 and 24 is negative, we will need further research about this question too.
+
+
+Looking at the correlation between variables and also thinking about which ones could be more useful for explaining the target variables we selected this set of explanatory variables: 
+```{r echo=TRUE}
+def_df <- df %>%  select(n_pharmacies, n_schools, n_transport_salespoints, population, family_income, income_per_capita, foreigners, pcg_age_0_24, pcg_age_25_39, pcg_age_70_y_mas, population_density, pcg_foreigners, ratio_expense_home) 
+
+#However, depending on the model and the target variable we are analyzing we will also need to create a concrete data frame:
+df_n_schools <- df %>% select(n_schools, population, family_income, pcg_age_0_24, pcg_age_70_y_mas, foreigners)
+df_n_pharmacies <- df %>% select (n_pharmacies, population, income_per_capita, venezuelan, pcg_age_70_y_mas)
+df_n_transport_salespoints <- df %>% select (n_transport_salespoints, area, foreigners, pcg_age_0_24)
+
+```
+
+
+
+# Feature engineering
+## Lineal Regression
+```{r echo=TRUE}
+#We will firstly scalate our data to interpret it better:
+df_n_schools <- df_n_schools %>% 
+                      transmute(
+                        n_schools = n_schools, 
+                        population = population/100, #takes values between 0 and 40
+                        family_income = family_income/1000, #takes values from o to almost 100
+                        pcg_age_0_24= pcg_age_0_24*100, #takes porcentual values from 0 to 50 
+                        pcg_age_70_y_mas = pcg_age_70_y_mas*100, #takes porcentual values from 0 to 40 
+                        foreigners = foreigners*100 #takes porcentual values from 0 to 50
+                        )
+
+hist(df_n_schools$pcg_age_70_y_mas) 
+```
+
+Due to the fact that the target variable n_schools takes more values it is the most convenient to do a linear regression even if it's a discrete variable. 
+
+A possible modification in the data in order to fit better the model can be transforming them. We are going to transform just those in which we are more interested: 
+```{r echo=TRUE}
+df_n_schools_trans <- df_n_schools %>%
+  transmute(
+    family_income2 = family_income^2,
+    family_income3 = family_income^3,
+    pcg_age_0_24_2 = pcg_age_0_24^2,
+    pcg_age_0_24_3 = pcg_age_0_24^3,
+    pcg_age_70_y_mas2 = pcg_age_70_y_mas^2,
+    pcg_age_70_y_mas3 = pcg_age_70_y_mas^3,
+    foreigners2 = foreigners^2,
+    foreigners3 = foreigners^3,
+    fam_pcg = family_income*pcg_age_0_24,
+    fam_for = family_income*foreigners,
+    fore_pcg = foreigners*pcg_age_0_24,
+    fam_70= family_income*pcg_age_70_y_mas,
+    n_schools_trans=n_schools
+  )
+
+df_n_schools_trans<-as.data.frame(scale(df_n_schools_trans))
+
+
+
+```
+
+If we plot again the distribution of the variables we see that the distribution of the target variables follow a logarithmic distribution and we also have too many 0s. It's typically a good practice trying to make the target variable more normal in linear regression models. As a result we can see than the frequency distribution is still logarithmic but closer to normality.
+```{r echo=TRUE}
+df_n_schools %>% ggplot() + 
+        aes(n_schools) + 
+        geom_bar()
+
+df_n_schools_norm <- df_n_schools %>% 
+  mutate(
+    n_schools_norm = 
+    log(df_n_schools$n_schools + 1)) %>% 
+    select (-n_schools)
+
+
+df_n_schools_norm %>% ggplot() + 
+        aes(n_schools_norm) + 
+        geom_bar()
+```
+
+
+## Poisson Regression
+They are used for modeling events where the outcomes are counts. Count data is discrete and has non-negative integer values that count something, like the number of times an event occurs during a given timeframe. Count data can also be expressed as rate data, since the number of times an event occurs within a timeframe can be expressed as a raw count. However, counts or rates are not just measured per time but also per space, which perfectly fits the data we are facing in this case. Poisson models are also typically used when the mean value of the counts is close to 0, which is our case.
+
+In poisson regression we need to transform the non-linear relationship to linear form. However, feature engeniering is not needed as the link function we are using does it. For that reason, a Poisson Regression model is also called log-linear model. 
+In our case the data isn't in the form of a bell curve like in a normal distribution, which is also good for poisson regressison.
+
+Poisson distribution is defined by a rate parameter lambda (mean=variance) that applies to counts of events. This is a good property for counts because the variance of counts does increase as the mean value goes up. This is what we call equidispersion, one of the most important characteristics for poisson distribution and poisson Regression, which means that the mean and variance of the distribution are equal. We can check it this way:
+```{r echo=TRUE}
+mean(df_n_schools$n_schools) # calculate mean, output: 0.908
+var(df_n_schools$n_schools) # calculate variance, output: 1.797
+```
+This is a clear case of over-dispersion and we will have to look at it. In this case we can use quasi-poisson regression to fix it so, again, feature ingenieering is not needed.
+
+
+Independent/predictor variables can be continuous, counts and categorical, however it's an extended practice to make variables categorical to find a better fit the data.
+```{r echo=TRUE}
+df_n_transport_trans <- df %>% transmute(
+    foreigners_trans = case_when(
+                          between(foreigners,0,0.1)  ~ "Very Low",
+                          between(foreigners,0.1000001,0.2)  ~ "Low",
+                          between(foreigners,0.2000001,0.3)  ~ "Medium",
+                          between(foreigners,0.3000001,0.4) ~ "High",
+                          between(foreigners,0.4000001,0.5) ~ "Very High"),
+    pcg_age_0_24_trans = case_when(
+                          between(pcg_age_0_24,0,0.1)  ~ "Very Low",
+                          between(pcg_age_0_24,0.10001,0.2)  ~ "Low",
+                          between(pcg_age_0_24,0.20001,0.3)  ~ "MediumLow",
+                          between(pcg_age_0_24,0.30001,0.4) ~ "MediumHigh",
+                          between(pcg_age_0_24,0.40001,0.5) ~ "High",
+                          between(pcg_age_0_24,0.50001,0.6) ~ "VeryHigh"),
+    area_trans = case_when(
+                          between(area,0,0.1)  ~ "Very Low",
+                          between(area,0.10000001,0.2)  ~ "Low",
+                          between(area,0.20000001,0.3)  ~ "MediumLow",
+                          between(area,0.30000001,0.4) ~ "MediumHigh",
+                          between(area,0.40000001,0.5) ~ "High",
+                          between(area,0.50000001,181) ~ "VeryHigh"),
+    n_transport_salespoints= n_transport_salespoints) 
+
+df_n_transport_trans$foreigners_trans <- as.factor(df_n_transport_trans$foreigners_trans)
+df_n_transport_trans$pcg_age_0_24_trans <- as.factor(df_n_transport_trans$pcg_age_0_24)
+df_n_transport_trans$area_trans <- as.factor(df_n_transport_trans$area_trans)
+```
+
+## Logistic Regression
+It uses odds instead of probabilities. While the probability is the ratio of something happening to *everything* that could happen, the odds are the ratio of something happening to *something* not happening. To make odds symmetrical, as the odds of something happening is between 1 to infinity and the odds of not happening are between 0 and 1 we transform it using what is know as the logit function, which forms the bases for logistic regression. Log(odds) are useful for solving certain statistics problems, specifically those in which we are trying to determine the probabilities for a phenomena with only two possible ends: win/lose, yes/no or true/false types of situations. In this case we are computing having or not having a pharmacy in a determined sector. This is why we have to transform our data this way:
+```{r echo=TRUE}
+df_n_pharmacies_log <- df_n_pharmacies %>% 
+                transmute(
+                  n_pharmacies_log = case_when(
+                                          n_pharmacies %in% 0 ~ 0,
+                                          n_pharmacies %in% c(1,2,3,4,5)~ 1),
+                            population = population,
+                            income_per_capita = income_per_capita , 
+                            venezuelan= venezuelan, 
+                            pcg_age_70_y_mas= pcg_age_70_y_mas)
+```
+
+# Regression models
+## Linear Regression
+To start with we are going to run different regressions with and without the different transformations:
+```{r echo=TRUE}
+linear_model1 <- lm(n_schools ~ ., data = df_n_schools)
+summary(linear_model1) 
+```
+The number of schools estimated is equal to -0.8 + b1X. Multiple R-Squared is 0.1262, which is quite low value, the model is not very good at predicting our target variable and we are only explaining a very little part of the data. However, all the explanatory variables introduced seem to be significant in order to explain the number of school in each section as the p value is lower than 0.05 in all cases.
+```{r echo=TRUE}
+linear_model2 <- lm(n_schools_trans ~ ., data = df_n_schools_trans)
+summary(linear_model2) 
+```
+Transformations didn't give us better results in this case.
+```{r echo=TRUE}
+linear_model3 <- lm(n_schools_norm ~ ., data = df_n_schools_norm)
+summary(linear_model3) 
+```
+The normalization of our the target variable raised the multiple R-squared to 0.1395, reducing the standard error by a half: 0.5176
+
+Let's check now if the models we run can be used for interpretation of the variables. The next lines help us is for knowing if multicollinearity is affecting our data or not. 
+```{r echo=TRUE}
+library(mctest)
+omcdiag(linear_model1) 
+omcdiag(linear_model2)
+omcdiag(linear_model3)
+```
+We have multicollinearity in the second linear regression, however it wasn't giving us us any improvement in relation to the other regressions
+
+We can also check linearity:
+```{r echo=TRUE}
+plot(linear_model1, 1) 
+plot(linear_model3, 1) 
+```
+
+We don't have a perfect horizontal line but it fits quite nice. We see some points that can be affecting too much over predictions and we should be also aware of the possible homocedasticity in the model as we can see some slope in the residuals distribution.
+
+Next step is checking the normality of residuals
+```{r echo=TRUE}
+plot(linear_model1, 2) 
+plot(linear_model3, 2)
+```
+
+Most of the data fits well the line but we have some outliers, the second plot fits better.
+
+Shapiro test is used to check the normality of the distribution:
+```{r echo=TRUE}
+shapiro.test(linear_model1$residuals)
+shapiro.test(linear_model3$residuals) 
+```
+In both cases it provides a value near to 1 so our data is normally distributed. Inevitably the transformed linear model seems to fit much better to normality, we will use it.
+
+In the previous plot we saw possible homocedastic pattern
+```{r echo=TRUE}
+plot(df_n_schools_norm$n_schools_norm,linear_model3$fitted.values) #there is some variance at the begginning and it get few values at the end. At the beggining it's ok but we should be careful about the possible homocedasticity at the end.T
+```
+
+To check if it's interfiering our analysis we run ncvTest.
+```{r echo=TRUE}
+library(car)
+ncvTest(linear_model3) 
+```
+As p-value is <0.5 we can ensure that variance is not constant and we should worry about it.
+
+To end up with, in orrder to check independence of the data we can run the Durbin Watson test:
+```{r echo=TRUE}
+durbinWatsonTest(linear_model3) 
+```
+Since p value is higher than 0.05 we can aenure that our data is independent.
+
+## Penalized regressions
+It might be possible to find better results including more new variables. However, this would lead to multicollinearity, as many variables which are included follow similar patterns. This dificults analysis and biases the results so we would be able to extract conclusions. We are going to try to avoid this issue using penalized regression techniques. 
+
+We'll begin by deploying an elastic-net model which combines lasso and ridge regression. In contrast to least squares regression, the fundamental goal of ridge regression is to identify a new line that, in principle, does not adequately fit the training data. To put it another way, we slightly skew the way the new line matches the data receiving a notorious reduction in variance in exchange for that bias. Lambda can be any value from 0 to positive infinity. When lambda = 0 the ridge regression penalty is also 0, and the line will be the same as the least squares because they are both minimizing the exact same thing. The larger we make lambda the slope gets asymptotically close to 0.
+
+The main distinction between ridge and lasso regression is that ridge regression can only reduce the slope asymptotically close to 0, whereas lasso regression can reduce the slope all the way to 0. In ridge regression, lambda can be any value from 0 to positive infinity. Lasso Regression is a little more effective than ridge regression at lowering the variance in models that contain a lot of superfluous variables because it can remove useless variables from equations. In contrast, ridge regression performs somewhat better when the majority of the variables are relevant.
+
+By combining lasso and ridge, elastic-net groups and shrinks the parameters associated with the correlated variables and leaves them in equation or removes them all at once.
+
+We will use the norlized variable as it was performing better than the rest.
+```{r echo=TRUE}
+library(glmnet) 
+
+X<-as.matrix(df_n_schools_norm %>% select(-n_schools_norm)) 
+Y<-as.matrix(df_n_schools_norm %>% select(n_schools_norm))
+grid = 10^seq(10, -2, length = 100) 
+
+linear_model3_train<-glmnet(x=X, y=Y[,1], lambda=grid, alpha=0) 
+
+library(broom) 
+tt<-tidy(linear_model3_train)
+tt %>% 
+  filter(dev.ratio == max(tt$dev.ratio)) %>% 
+  mutate(across(c(estimate,dev.ratio), round, 3)) #select the combinaiton with the highest R square value. 
+tt 
+```
+We are getting different results using different combinations of lambda 1 and 2. We see for each value of lambda the estimate and how the ratio changes: "dev ratio" tells us which are the best models. In this case the best model is in the 100 step, so we can infer that probably we can find better models if we keep it with higher numbers. However, we are going to introduce more variables instead and test the new model.
+
+To train our model we will use the bigger data frame with the normalized independent variable, as it is giving the best performance.
+```{r echo=TRUE}
+filter_df_norm <- filter_df %>% 
+  mutate(
+    n_schools_norm = 
+    log(df_n_schools$n_schools + 1)) %>% 
+    select (-n_schools)
+
+training.samples2 <- filter_df_norm$n_schools_norm %>%  
+  createDataPartition(p = 0.8, list = FALSE) 
+train.data2  <- filter_df_norm[training.samples2, ]
+test.data2 <- filter_df_norm[-training.samples2, ] 
+```
+To training the algorithm we need then the data to train the machine learning methods and then test the machine learning methods. We split data as we shouldn't reuse the same data for both training and testing. We divided 80% of the data for training and 20% for testing and finding most optimal lambda though Ten-Fold Cross Validation:
+```{r echo=TRUE}
+lambda <- 10^seq(-3, 3, length = 100)
+```
+
+We will train linear, lasso, ridge and elastic net models.
+```{r echo=TRUE}
+linear2<-train(n_schools_norm ~., data = train.data2,
+              method = 'lm',
+              metric =  "Rsquared",
+              trControl = trainControl("cv", number = 10),
+              tuneLength = 10 
+)
+
+ridge2 <- train( 
+  n_schools_norm ~., data = train.data2, method = "glmnet",
+  trControl = trainControl("cv", number = 10),
+  tuneGrid = expand.grid(alpha = 0, lambda = lambda) #The “alpha” parameter is set to 0, which means that ridge regression is being used.
+  ) 
+
+lasso2 <- train(
+  n_schools_norm ~., data = train.data2, method = "glmnet",
+  trControl = trainControl("cv", number = 10),
+  tuneGrid = expand.grid(alpha = 1, lambda = lambda) 
+)
+
+elastic2 <- train(
+  n_schools_norm ~., data = train.data2, method = "glmnet",
+  trControl = trainControl("cv", number = 10),
+  tuneLength = 10
+  ) 
+
+models2 <- list(linear2=linear2, ridge2 = ridge2, lasso2 = lasso2, elastic2 = elastic2)
+
+res <- resamples(models2) %>% summary() 
+res
+```
+In the output we can see a comparison of the performance of the three models by showing the Mean Absolute Error, Root Mean Squared Error, R Squared of the different combinations we did. Elastic model is getting the lowest error but lasso regression has performed better in terms achieving a much higher R squared and still have a low error. 
+The utility of lasso regression is that it returns many 0 values, which helps us to simplify and use a model with a little number of variables. However in this case it made most of the values 0, using only very few variables. This is not really useful to interpret the data, however, we predicted a considerable positive between the number of schools and the percentage of people of 70 years and more. This is a problem in the distribution of schools in the data, it's non-sense that schools are not placed where there are more kids. 
+
+
+## Poisson Regression
+The target variable is in the form of a bell curve like in a normal distribution. However, when we compare it to how theoretically the data should be distributed we see a clear zero-inflation.
+```{r echo=TRUE}
+success <- min(df_n_transport_salespoints[,n_transport_salespoints]):max(df_n_transport_salespoints[,n_transport_salespoints])
+plot(density(df_n_transport_trans[,n_transport_salespoints]),ylim=c(0,1))
+lines(success,dpois(success, lambda=mean(df_n_transport_trans[,n_transport_salespoints])),col="red")
+```
+
+In our regression are starting using the variables without tranformations and then use the labeled data
+```{r echo=TRUE}
+#No transformation
+pois_reg <- glm(n_transport_salespoints ~ area + foreigners + pcg_age_0_24, 
+                df_n_transport_salespoints, family = poisson(link = "log"))
+summary(pois_reg)
+```
+The coefficients tells us the effect of the independent variables, but because we are using logarithmic link function the coefficient is not linear, a 1 unit increase in the independent variable causes the dependent variable to increase by a factor of e^coefficient (in the case of population our dependent variable would be multiplied to e to the 6 for each unit increase).
+
+The coefficients table provides the estimated effect size of each predictor variable on the response variable. For example, the coefficient for the variable "foreigners" is 3.377362, indicating that a one unit increase in foreigners is associated with a e^3.377362 increase in the number of transport salespoints. 
+
+The deviance residuals table provides a measure of how well the model fits the data. The null deviance and residual deviance indicate that the model fits the data well, as the residual deviance is lower than the null deviance. The AIC is a measure of the model's predictive accuracy, so a higher AIC may indicate that the model is better at predicting outcomes than a model with a lower AIC, however if it is bigger than the null deviance it indicates that the model is over-fitting the data.
+
+```{r echo=TRUE}
+#Poisson Regression - transformed
+pois_reg_trans <- glm(n_transport_salespoints ~ area_trans + pcg_age_0_24_trans + foreigners_trans, 
+                  df_n_transport_trans, family = poisson(link = "log"))
+
+summary(pois_reg_trans)
+```
+In this case we are handling over-fitting problem again and getting worse results with less significance.  
+
+Over-fitting is necessary to handle because the standard error is going to be underestimated, which makes the p-value smaller and make things more significant than they really are. Our decision can be nearer to a false positive, it might have inflated type one error. Our target variable is discrete and non-negative and variance is much higher than mean, so we are using quassi-poisson model to fix over-fitting
+
+```{r echo=TRUE}
+#Quassipoisson Regression - no transformation
+
+pois_reg2 <- glm(n_transport_salespoints ~ area + pcg_age_0_24 + foreigners,
+                       data = df_n_transport_salespoints, family = quasipoisson(link = "log"))
+summary(pois_reg2)
+```
+The results show that "area_transVeryHigh", "pcg_age_0_24_transLow", and "foreigners_transLow" have a statistically significant positive effect on the number of transport salespoints. The results also show that "pcg_age_0_24_transMediumLow", "foreigners_transMedium" and "foreigners_transVeryLow" have a statistically significant negative effect on the number of transport salespoints. 
+The deviance residuals for this generalized linear model are between -1.3455 and 3.9167. This indicates that the model is able to explain the variation in the data fairly well, since the residuals are not too far from zero. 
+
+```{r echo=TRUE}
+#Quassipoisson Regression - transformed
+
+pois_reg2_trans <- glm(n_transport_salespoints ~ area_trans + pcg_age_0_24_trans + foreigners_trans , 
+                       data = df_n_transport_trans, family = quasipoisson(link = "log"))
+summary(pois_reg2_trans)
+```
+The two models have similar deviance residuals and similar coefficients. The second model has a bit significant coefficients, but has also more variables. 
+
+We are going to rain the Poisson model to optimize the results using the transformed and not transformed data.
+```{r echo=TRUE}
+train_idx <- df_n_transport_salespoints[,n_transport_salespoints] %>% createDataPartition(p=0.7, list=FALSE) 
+train_idx2 <- df_n_transport_trans[,n_transport_salespoints] %>% createDataPartition(p=0.7, list=FALSE) 
+
+train.data <- df_n_transport_salespoints[(train_idx),]
+train.data2 <- df_n_transport_trans[(train_idx),]
+
+test.data <- df_n_transport_salespoints[(-train_idx),]
+test.data2 <- df_n_transport_trans[(-train_idx),]
+
+modformula <- formula(paste0("n_transport_salespoints", " ~."))
+
+pois <- train(
+  modformula, data = train.data, method = "glm", family="poisson"
+)
+preds<-predict(pois, test.data)
+
+data.frame(real=test.data[,n_transport_salespoints], pred=round(preds)) %>% 
+  group_by(real) %>%
+  summarise(n = n(), mae=MAE(pred,real), mean_pred=mean(pred))
+```
+The predictions from the model are calculated on the test data and a data frame is created with the real values and predictions. As a result we can see a data frame with four columns: real, n, mae, and mean_pred. The real column contains the values of the n_transport_salespoints column, the n column contains the number of observations, the mae column contains the mean absolute error, and the mean_pred column contains the mean prediction. The mean prediction is relatively low, indicating that the model is not performing very well. The result for the mean absoute error is not bad, in this sense is quite and accurate model as it's predicting well 0 and 1 columns in which we can find most values.
+
+```{r echo=TRUE}
+#Without transformations:
+pois2 <- train(
+  modformula, data = train.data2, method = "glm", family="poisson"
+)
+preds2<-predict(pois2, test.data2)
+
+
+data.frame(real=test.data2[,n_transport_salespoints], pred=round(preds2)) %>% 
+  group_by(real) %>%
+  summarise(n = n(), mae=MAE(pred,real), mean_pred=mean(pred))
+```
+This regression is problematic because due to the simplification of the variables they are too correlated. We are going to train a quassi-poisson model to fix it. Lets train quasi-poisson with and without tranformations and also taking more variables into account
+
+We are adding more variables:
+```{r echo=TRUE}
+filter_df_pois <- filter_df %>% select(n_transport_salespoints, population,family_income, income_per_capita, foreigners, pcg_age_0_24, area)
+
+train_idx_filter <- filter_df_pois[,n_transport_salespoints] %>% createDataPartition(p=0.7, list=FALSE) 
+train.data_filter <- filter_df_pois[(train_idx_filter),]
+test.data_filter <- filter_df_pois[(-train_idx_filter),]
+qpois_filter <- train(
+  modformula, data = train.data_filter, method = "glm", family="quasipoisson"
+)
+
+#Transformed:
+qpois_trans <- train(
+  modformula, data = train.data2, method = "glm", family="quasipoisson"
+)
+
+#Comparisson between models:
+
+models <- list(pois=pois, qpois_filter=qpois_filter, qpois_trans=qpois_trans)
+resamples(models) %>% summary()
+```
+Based on the results of the MAE, RMSE and Rsquared metrics, the best model appears to be the first poisson model. This is because it has the lowest MAE and RMSE values, as well the best Rsquared value. This suggests that this poisson model is the most accurate and reliable model for predicting the outcome of the experiment.
+
+
+## Logistic regression
+```{r echo=TRUE}
+model <- glm(n_pharmacies_log ~., data = df_n_pharmacies_log, family = binomial)
+summary(model)
+```
+We have low coefficients which means the independent variables are not very important for our prediction, but we have 4 variables that are strongly correlated to our target variable. In linear regression prediction is directly related to our factors, if a1X1 rises we increase our prediction in the same term as the coefficient goes up, but in logistic regression we model long odds. 
+```{r echo=TRUE}
+round(exp(coef(model)),2) 
+```
+The exponential of the coefficient gives us how much long odds advance presure = 1, means there is no difference. If pressure was 3 long odds are increased 3 times.
+
+Let's split train and test datasets. Ridge regression can also be applied to Logistic Regression and to Discrete variables. When applied to logistic Regression, Ridge Regression optimizes the sum of the likelihooods instead of the squared residuals.
+```{r echo=TRUE}
+training.samples <- df_n_pharmacies_log$n_pharmacies_log %>% 
+  createDataPartition(p = 0.8, list = FALSE)
+train.data  <- df_n_pharmacies_log[training.samples, ]
+test.data <- df_n_pharmacies_log[-training.samples, ]
+
+table(train.data$n_pharmacies_log)
+```
+1613 negative cases and 1919 positive ones in the sample
+
+We transform the data to factor:
+```{r echo=TRUE}
+train.data$n_pharmacies_log <- as.character(train.data$n_pharmacies_log)
+
+train.data <- train.data %>% 
+  transmute(
+    n_pharmacies_log = case_when(
+                            n_pharmacies_log %in% "0" ~ "neg",
+                            n_pharmacies_log %in% "1" ~ "pos"),
+                            population = population,
+                            income_per_capita = income_per_capita , 
+                            venezuelan= venezuelan, 
+                            pcg_age_70_y_mas= pcg_age_70_y_mas)
+train.data$n_pharmacies_log <- as.factor(train.data$n_pharmacies_log)
+
+test.data$n_pharmacies_log <- as.character(test.data$n_pharmacies_log)
+
+
+test.data <- test.data %>% 
+  transmute(
+    n_pharmacies_log = case_when(
+                            n_pharmacies_log %in% "0" ~ "neg",
+                            n_pharmacies_log %in% "1" ~ "pos"),
+                            population = population,
+                            income_per_capita = income_per_capita , 
+                            venezuelan= venezuelan, 
+                            pcg_age_70_y_mas= pcg_age_70_y_mas)
+              
+test.data$n_pharmacies_log <- as.factor(test.data$n_pharmacies_log)
+
+```
+
+Let's make predictions
+```{r echo=TRUE}
+probabilities <- model %>% predict(test.data, type = "response")
+predicted.classes <- ifelse(probabilities > 0.5, "pos", "neg")
+mean(predicted.classes == test.data$n_pharmacies_log)
+```
+The first performance metrics is model accuracy, which compares predictive classes with real data and we get true or false. The accuracy of the model is 57.36961% of the predictions which is not very good result.
+
+```{r echo=TRUE}
+confusionMatrix(as.factor(test.data$n_pharmacies_log), as.factor(predicted.classes)) 
+```
+We create our confusion metric comparing the real value against the prediction. We predict in 130 false negative and 246 false positive. The sensitivity of the model is 56.23%, which means that 56.23% of the time the model is correctly predicting the negative class. The specificity of the model is 57.95%, which means that 57.95% of the time the model is correctly predicting the positive class. The Kappa statistic is 0.1293, which indicates that the model is only slightly better than random chance.
+
+
+
+# Result analysis and visualization
+## Linear Regression
+```{r echo=TRUE}
+bwplot(resamples(models2))
+
+plot(lasso2) 
+```
+
+For higher values of lambda the error doesn't increase.
+```{r echo=TRUE}
+plot(lasso2$finalModel, xvar= "lambda", label = T) 
+```
+
+We see how all the coefficients get closer to 0 as lambda gets bigger values letting less and less independent variables, from 52 to 2.
+
+However linear trained model might be more interesting for analysis as lasso is throwing most of the variables away.
+```{r echo=TRUE}
+plot(linear2$finalModel, 1)
+plot(linear2$finalModel, 2)
+plot(linear2$finalModel, 5)
+```
+
+All assumptions are fulfilled
+```{r echo=TRUE}
+summary(linear2) 
+```
+It gives significance predictions over the area, the population, the average age, and the population density.The model predicts that whenever population rises the number of schools does too. But again, it doesn't make sense that whenever the average age rises we find more schools. 
+
+## Poisson model
+```{r echo=TRUE}
+summary(qpois_filter)
+table(test.data_filter[,n_transport_salespoints], round(preds)) 
+```
+Our models predicts that population, foreigners, income per capita, and area have a significant positive effect on the number of sales points, indicating that as these factors increase, the number of sales points will increase. While PCG age 0-24, family income has a significant negative effect on the number of sales points, indicating that as the proportion of people in this age group increases, the number of sales points will decrease.
+The table that shows the number of transport sales points from the test.data_filter data set that have a rounded predicted value of 0, 1, or 4. The table shows that there are 967 entries with a rounded predicted value of 0, 46 entries with a rounded predicted value of 1, and 0 entries with a rounded predicted value of 4. There are also 240 entries with a rounded predicted value of 1, 32 entries with a rounded predicted value of 1, and 1 entry with a rounded predicted value of 4. Finally, there are 25 entries with a rounded predicted value of 2, 7 entries with a rounded predicted value of 3, and no entries with a rounded predicted value of 4.
+
+```{r echo=TRUE}
+library(pROC)
+roc <- roc(as.factor(test.data$n_pharmacies_log), probabilities) 
+sens <- roc$sensitivities 
+spec <- roc$specificities
+
+ggplot(data.frame(sens,spec), aes(x=1-spec, y=sens)) + geom_line()
+
+auc(test.data$n_pharmacies_log, probabilities)
+
+```
+0.607 is not considered a good AUC score. AUC is a measure of how well a model can distinguish between positive and negative classes. 
+
+The results for logistic regression are not optimal
+```{r echo=TRUE}
+train.data %>%
+  mutate(prob = ifelse(n_pharmacies_log == "pos", 1, 0)) %>%
+  ggplot(aes(pcg_age_70_y_mas, prob)) +
+  geom_point(alpha = 0.2) +
+  geom_smooth(method = "glm", method.args = list(family = "binomial")) +
+  labs(
+    title = "Logistic Regression Model", 
+    )
+```
+
+
+
+
+
+
